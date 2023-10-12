@@ -67,12 +67,15 @@ def create_tokenizer_custom(file):
 
 
 def sample(device, model, tokenizer, context, max_length, num_return_sequences, top_p, temp, pad_token_id):
-
     with torch.no_grad():
-        input_ids = torch.tensor(tokenizer.encode(context).ids).view([1, -1]).to(device)
-        tokens_batch = model.generate(input_ids, do_sample=True, temperature=temp, max_length=max_length, top_p=top_p, num_return_sequences=num_return_sequences, pad_token_id=pad_token_id)
         as_lists = lambda batch: [batch[i, ...].detach().cpu().numpy().tolist() for i in range(batch.shape[0])]
-        return tokenizer.decode_batch(as_lists(tokens_batch))
+        input_ids = torch.tensor(tokenizer.encode(context).ids).view([1, -1]).to(device)
+        output = []
+        for _ in range(num_return_sequences):
+            tokens_batch = model.generate(input_ids, do_sample=True, temperature=temp, max_length=max_length, top_p=top_p, num_return_sequences=1, pad_token_id=pad_token_id)
+
+            output += tokenizer.decode_batch(as_lists(tokens_batch))
+    return output
 
 
 def truncate(sample, terminals):
@@ -97,9 +100,7 @@ def cross_entropy(logits, target, reduction='mean'):
 
 
 def main():
-
     # (0) constants
-
     models_151M = [ 'progen2-small' ]
     models_754M = [ 'progen2-medium', 'progen2-oas', 'progen2-base' ]
     models_2B = [ 'progen2-large', 'progen2-BFD90' ]
@@ -107,7 +108,6 @@ def main():
     models = models_151M + models_754M + models_2B + models_6B
     
     # (1) params
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, choices=models, default='progen2-large')
     parser.add_argument('--device', type=str, default='cuda:0')
@@ -124,7 +124,6 @@ def main():
 
 
     # (2) preamble
-
     set_env()
     set_seed(args.rng_seed, deterministic=args.rng_deterministic)
 
@@ -140,20 +139,15 @@ def main():
         args.fp16 = False
 
     # (3) load
-
     with print_time('loading parameters'):
         model = create_model(ckpt=ckpt, fp16=args.fp16).to(device)
-
 
     with print_time('loading tokenizer'):
         tokenizer = create_tokenizer_custom(file='tokenizer.json')
 
     # (4) sanity
-
     if args.sanity:
-
         with print_time('sanity cross-entropy'):
-
             def ce(tokens):
                 with torch.no_grad():
                     with torch.cuda.amp.autocast():
@@ -188,19 +182,15 @@ def main():
             assert abs(ce_eval - ce_target) < 0.1
 
     # (5) sample
-
     with print_time('sampling'):
         completions = sample(device=device, model=model, tokenizer=tokenizer, context=args.context, pad_token_id=tokenizer.encode('<|pad|>').ids[0], num_return_sequences=args.num_samples, temp=args.t, top_p=args.p, max_length=args.max_length)
         truncations = [truncate(completion, terminals=['1', '2']) for completion in completions]
 
-        print(args.context)
-
+        print(f"\nContext:\n{args.context}\n")
+        print("Samples:")
         for (i, truncation) in enumerate(truncations):
-
+            print(f">{i}\n{truncation}")
             print()
-            print(i)
-            print(truncation)
-            
 
 
 if __name__ == '__main__':
